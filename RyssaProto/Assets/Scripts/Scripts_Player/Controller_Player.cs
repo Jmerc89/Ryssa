@@ -1,44 +1,84 @@
+
+using System.Runtime.CompilerServices;
 using UnityEngine;
 
-[RequireComponent(typeof(CharacterController))]
+[RequireComponent(typeof(Rigidbody))]
 public class PlayerController : MonoBehaviour
 {
     [Header("Movement Settings")]
-    public float moveSpeed = 5f;         // Base horizontal movement speed
-    public float sprintMultiplier = 1.5f;  // Sprint multiplier when Left Shift is held
+    public float moveSpeed = 5f;
+    public float sprintMultiplier = 1.5f;
+    public float acceleration = 10f;
+    public float airControlMultiplier = 0.5f;
+    private Player_Climb climbSys;
+    private ClimbData climbData;
 
     [Header("Jump & Gravity Settings")]
-    public float jumpForce = 8f;         // Initial jump velocity
-    public float gravity = 20f;          // Gravity acceleration
-    private bool canJump=true;
+    public float jumpForce = 8f;
+    public float gravityMultiplier = 2f;
+    private bool externalGroundOverride = false;
+
+
+    [Header("Ground Check Settings")]
+    public LayerMask groundMask;
+    public float groundCheckDistance = 0.2f;
+    public float groundSphereOffset = -0.5f;
+    public float groundSphereRadius = 0.3f;
+    public bool showGroundCheck = true;
+    public Color groundSphereColor = Color.red;
 
     [Header("Camera Reference")]
-    public Transform cameraTransform;    // Reference to the camera for relative movement
+    public Transform cameraTransform;
 
-    private float verticalVelocity = 0f; // Current vertical speed (for jumping and gravity)
-    private CharacterController controller;
+    private Rigidbody rb;
+    private bool isGrounded = false;
+    private Vector3 moveInput;
+    private Vector3 moveVelocity;
+    private bool isClimbing;
+
+    public void OverrideGrounded(bool state)
+    {
+        externalGroundOverride = state;
+    }
+
+    public bool IsGrounded()
+    {
+        return isGrounded || externalGroundOverride;
+    }
 
     void Start()
     {
-        controller = GetComponent<CharacterController>();
-        if (controller == null)
-        {
-            Debug.LogError("PlayerController: No CharacterController found on this GameObject.");
-        }
+        rb = GetComponent<Rigidbody>();
+        rb.freezeRotation = true; // Prevent unwanted physics rotation
+        climbSys = GetComponent<Player_Climb>();
     }
 
     void Update()
     {
-        MovePlayerRelativeToCamera();
+
+        HandleInput();
+        GroundCheck();
+
+        if (Input.GetButton("Jump") && IsGrounded())
+        {
+            Jump();
+        }
     }
 
-    private void MovePlayerRelativeToCamera()
+    void FixedUpdate()
     {
-        // Get horizontal and vertical input from keyboard (WASD or Arrow keys)
+        MovePlayer();
+        ApplyExtraGravity();
+        isClimbing = climbSys.IsClimbing();
+
+
+    }
+
+    private void HandleInput()
+    {
         float horizontalInput = Input.GetAxis("Horizontal");
         float verticalInput = Input.GetAxis("Vertical");
 
-        // Get camera's forward and right vectors, ignoring any vertical component.
         Vector3 camForward = cameraTransform.forward;
         camForward.y = 0;
         camForward.Normalize();
@@ -47,42 +87,74 @@ public class PlayerController : MonoBehaviour
         camRight.y = 0;
         camRight.Normalize();
 
-        // Calculate desired move direction relative to the camera.
-        Vector3 moveDirection = (camForward * verticalInput) + (camRight * horizontalInput);
-        if (moveDirection.magnitude > 1f)
-        {
-            moveDirection.Normalize();
-        }
+        moveInput = (camForward * verticalInput + camRight * horizontalInput).normalized;
 
-        // Check for sprint input (using Left Shift) and apply sprint multiplier.
         float currentSpeed = moveSpeed;
         if (Input.GetKey(KeyCode.LeftShift))
         {
             currentSpeed *= sprintMultiplier;
         }
+        moveVelocity = moveInput * currentSpeed;
+    }
 
-        if (Input.GetButton("Jump")&& canJump)
+    private void MovePlayer()
+    {
+        if (isClimbing && climbData != null)
         {
-            canJump = false;
-            verticalVelocity = jumpForce;
-        }
-        // Handle jumping and gravity:
-        if (controller.isGrounded)
-        {
-            verticalVelocity = 0f; // Reset vertical velocity when grounded.
-            canJump = true;
-        }
-        else
-        {
-            // Apply gravity while airborne.
-            verticalVelocity -= gravity * Time.deltaTime;
+            // Move vertically using climb speed
+            Vector3 climbDirection = Vector3.up * climbData.climbSpeed;
+            rb.linearVelocity = new Vector3(0f, climbDirection.y, 0f); // Optionally allow X/Z movement
+            return;
         }
 
-        // Combine horizontal movement with vertical velocity.
-        Vector3 finalMovement = moveDirection * currentSpeed;
-        finalMovement.y = verticalVelocity;
+        // Standard grounded or airborne movement
+        if (moveInput.magnitude > 0.1f)
+        {
+            Vector3 targetVelocity = moveVelocity;
+            if (!isGrounded)
+                targetVelocity *= airControlMultiplier;
 
-        // Use the CharacterController to move the player.
-        controller.Move(finalMovement * Time.deltaTime);
+            Vector3 velocityChange = targetVelocity - rb.linearVelocity;
+            velocityChange.y = 0; // Preserve existing vertical velocity
+
+            rb.AddForce(velocityChange * acceleration, ForceMode.Acceleration);
+        }
+    }
+
+
+    private void Jump()
+    {
+        Vector3 jumpVelocity = rb.linearVelocity;
+        jumpVelocity.y = jumpForce;
+        rb.linearVelocity = jumpVelocity;
+    }
+
+    private void ApplyExtraGravity()
+    {
+        if (!isGrounded)
+        {
+            rb.AddForce(Vector3.down * gravityMultiplier, ForceMode.Acceleration);
+        }
+    }
+
+    private void GroundCheck()
+    {
+        Vector3 castOrigin = transform.position + Vector3.down * groundSphereOffset;
+
+        isGrounded = Physics.SphereCast(castOrigin, groundSphereRadius,
+            Vector3.down, out RaycastHit hit, groundCheckDistance, groundMask);
+    }
+
+    private void OnDrawGizmosSelected()
+    {
+
+        if (!showGroundCheck) return;
+        Gizmos.color = groundSphereColor;
+
+        // Match ground check logic exactly 
+        Vector3 castOrigin = transform.position + Vector3.down * groundSphereOffset;
+        Gizmos.DrawWireSphere(castOrigin, groundSphereRadius);
+
+
     }
 }
